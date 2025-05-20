@@ -1,0 +1,149 @@
+# -----------------------------------------------------------------------------
+# 0. Default Execution Parameters (Optional)
+# -----------------------------------------------------------------------------
+# Эти значения будут использоваться, если соответствующие параметры
+# не переданы через командную строку. Если и здесь они не указаны (или отсутствуют),
+# скрипт запросит их интерактивно.
+defaults:
+  filter_id: "34665"  # ЗАМЕНИ НА СВОЙ ID ФИЛЬТРА ПО УМОЛЧАНИЮ или оставь пустым/закомментируй
+  output_dir: 'C:\Users\haranski\Downloads' # ЗАМЕНИ НА СВОЙ ПУТЬ ПО УМОЛЧАНИЮ или оставь пустым/закомментируй
+
+# -----------------------------------------------------------------------------
+# 1. JIRA Connection & Data Request Settings
+# -----------------------------------------------------------------------------
+jira:
+  server_url: "https://support.softclub.by/" # ЗАМЕНИ НА АКТУАЛЬНЫЙ URL JIRA
+  timeout: 30 # Таймаут для запросов к JIRA в секундах
+  max_results_per_request: 1000 # Макс. кол-во задач в одном запросе к /search
+
+  # Поля JIRA, которые необходимо запросить для каждой задачи.
+  # Эти поля будут доступны для использования в issue_display_template.
+  issue_fields_to_request:
+    - "key"
+    - "summary"
+    - "issuetype"   # Для {issuetype_name}
+    - "priority"    # Для {priority_name}
+    - "status"      # Для {status_name}
+    - "resolution"  # Для {resolution_name}
+    - "assignee"    # Для {assignee_name}
+    - "reporter"    # Для {reporter_name}
+    - "created"     # Для {created} (дата создания задачи, формат YYYY-MM-DDTHH:mm:ss.sss+ZZZZ)
+    - "updated"     # Для {updated} (дата последнего обновления задачи)
+    - "labels"      # Для {labels} (список меток через запятую)
+    - "components"  # Для {components} (список компонентов через запятую)
+    - "issuelinks"
+    - "fixVersions" # Необходимо для парсинга версий
+    - "customfield_10400" # Описание для заказчика (ЗАМЕНИ, ЕСЛИ ID ДРУГОЙ)
+    - "customfield_12001" # Инструкция по установке (ЗАМЕНИ, ЕСЛИ ID ДРУГОЙ)
+    # Добавь сюда другие кастомные поля, если они нужны в шаблонах, например:
+    # - "customfield_XXXXX" # Для {customfield_XXXXX}
+
+  # Заголовки, которые будут использоваться для HTTP-запросов к JIRA API
+  request_headers:
+    "Accept": "application/json"
+    "User-Agent": "Python Release Notes Generator (SC-ReleaseNotesGen/1.0)"
+    # "Content-Type": "application/json" # Нужен в основном для POST/PUT, для GET не так критичен
+    # "Accept-Language": "ru-RU,ru;q=0.9" # Если важно получать ответы на определенном языке
+
+# -----------------------------------------------------------------------------
+# 2. Release Notes Content and Structure
+# -----------------------------------------------------------------------------
+release_notes:
+  title_template: "Release Notes - версия {global_version} - {current_date}"
+  date_format: "%d.%m.%Y" # Формат для {current_date} в заголовке RN
+
+  # Определение секций в документе Release Notes
+  sections:
+    changes: # Уникальный ключ секции (используется внутри скрипта)
+      title: "Изменения" # Заголовок этой секции в документе
+      source_custom_field_id: "customfield_10400" # ID поля "Описание для заказчиков"
+                                                 # Если поле пустое, задача не попадет в эту секцию
+      disable_grouping: false # По умолчанию false (т.е. группировка по МС будет)
+      # group_by_issue_type имеет смысл только если disable_grouping = false
+      group_by_issue_type: true # Группировать ли задачи по типу (Bug, Story и т.д.)
+      # Шаблон для отображения каждой задачи в этой секции.
+      # {content} будет заменен значением из source_custom_field_id.
+      # Остальные плейсхолдеры - из issue_fields_to_request.
+      issue_display_template: |
+        {formatted_issuelinks}
+        {content}
+
+    installation_instructions:
+      title: "Инструкция по установке"
+      source_custom_field_id: "customfield_12001" # ID поля "Инструкция по установке"
+      disable_grouping: false
+      group_by_issue_type: false
+      issue_display_template: |
+        {formatted_issuelinks}
+        {content}
+
+  # Конфигурация для таблицы микросервисов и их версий в начале Release Notes
+  microservices_table:
+    enabled: true # Включить/выключить генерацию таблицы
+    title: "Состав релиза по микросервисам"
+    columns:
+      - header: "Микросервис"
+        value_placeholder: "{name}" # Использует ключ 'name' из summary-объекта микросервиса
+      - header: "Версия"
+        value_placeholder: "{version}" # Использует ключ 'version'
+
+# -----------------------------------------------------------------------------
+# 3. Version Parsing Rules
+# -----------------------------------------------------------------------------
+version_parsing:
+  global_version:
+    extraction_patterns:
+      - '^(.*?)\s*\(global\)$'
+      - '^(.*?)\s*\(prod\)$' # Пример для другого суффикса
+      - '^(.*?)\s*\( релиз \)$' # Пример с пробелами и кириллицей
+      - '^Version\s+(.*?)$'
+      - '^Release\s+(.*?)$'
+      # Основной паттерн для версии типа X.Y.Z или X.Y.Z-SUFFIX, должен быть достаточно специфичным
+      - '^(\d+\.\d+\.\d+(?:[-.][a-zA-Z0-9_]+)*)$'
+
+  microservice_version:
+    # Паттерн для извлечения префикса и версии микросервиса.
+    # Группа 1: Префикс (ЗАГЛАВНЫЕ буквы, возможно с цифрами)
+    # Группа 2: Версия (формат X.Y.Z с возможными суффиксами)
+    extraction_pattern: '^([A-Z][A-Z0-9]*?)(\d+\.\d+\.\d+(?:[.-][a-zA-Z0-9_]+)*)$'
+    prefix_group_index: 1
+    version_group_index: 2
+
+  # Карта для сопоставления префиксов микросервисов с их полными именами
+  microservice_mapping:
+    IN: "phobos-integration"
+    FR: "phobos-front"
+    IP: "phobos-ip-checker"
+    PR: "phobos-proxy"
+    PP: "phobos-profile-provider"
+    SC: "phobos-scoring-center"
+    AM: "phobos-AFM"
+    KF: "phobos-kafka-finder"
+    IR: "phobos-iris"
+    WF: "sc-workflow"
+    NT: "phobos-notification"
+    CA: "phobos-client-agent"
+    # Добавь сюда ВСЕ ваши префиксы и соответствующие полные имена
+    # YOURPREFIX: "Your Microservice Full Name"
+
+# -----------------------------------------------------------------------------
+# 4. Output Formats Configuration
+# -----------------------------------------------------------------------------
+output_formats:
+  markdown:
+    main_title_level: 1
+    table_title_level: 2
+    section_title_level: 2
+    microservice_group_level: 3
+    issue_type_group_level: 4
+    task_list_item_marker: "-" # Маркер для элементов списка задач
+    # Шаблон имени файла. {global_version} и {current_date_filename} (YYYY-MM-DD) будут заменены.
+    output_filename_template: "ReleaseNotes_{global_version}_{current_date_filename}.md"
+    # output_directory: "./releases" # Опционально, куда сохранять. По умолчанию - аргумент --output-dir или текущая папка.
+
+# -----------------------------------------------------------------------------
+# 5. Logging Configuration (используется в main.py)
+# -----------------------------------------------------------------------------
+# logging: # Настройки базового логирования в main.py могут быть переопределены аргументом --loglevel
+#   level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
+#   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

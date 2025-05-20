@@ -1,0 +1,30 @@
+# Виртуальное окружение
+.venv/
+venv/
+ENV/
+
+# Файлы IDE
+.idea/
+.vscode/
+
+# Python кэш
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Файл с переменными окружения
+.env
+
+# Файлы сборки/дистрибуции
+dist/
+build/
+*.egg-info/
+
+# Лог файлы
+*.log
+
+# Отчеты о покрытии тестами
+.coverage
+coverage.xml
+htmlcov/
