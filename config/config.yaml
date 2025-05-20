@@ -141,6 +141,35 @@ output_formats:
     output_filename_template: "ReleaseNotes_{global_version}_{current_date_filename}.md"
     # output_directory: "./releases" # Опционально, куда сохранять. По умолчанию - аргумент --output-dir или текущая папка.
 
+  word: # Новая секция для .docx
+    enabled: true # true - генерировать .docx, false - не генерировать
+    # Путь к файлу шаблона .docx (опционально).
+    # Если указан, новый документ будет создан на его основе, наследуя стили, колонтитулы и т.д.
+    # Путь может быть относительным от корня проекта.
+    template_path: 'C:\Users\haranski\PycharmProjects\release_notes_by_jira\config\templates\rn_template.docx' # Пример
+    # Шаблон имени файла для сохранения.
+    # Плейсхолдеры: {global_version}, {current_date_filename} (YYYY-MM-DD)
+    output_filename_template: "ReleaseNotes_{global_version}_{current_date_filename}.docx"
+    # output_directory: "./releases_output" # Также используется из args.output_dir или defaults
+    styles:
+      # ... другие стили ...
+      table_style: "Normal Table"
+      list_bullet_first_line: "List Bullet"
+      list_bullet_multiline_indent: "Normal"
+    # Опционально: Маппинг на имена стилей Word.
+    # Если используется template_path с хорошо настроенными стилями по умолчанию
+    # (Заголовок 1, Заголовок 2 и т.д.), это может не понадобиться.
+    # Если стили в шаблоне называются иначе, или шаблон не используется, это может быть полезно.
+    # styles:
+    #   main_title: "Заголовок 1"       # Имя стиля в Word для главного заголовка
+    #   table_title: "Заголовок 2"     # Имя стиля для заголовка таблицы компонентов
+    #   section_title: "Заголовок 2"   # Имя стиля для заголовков секций
+    #   microservice_group: "Заголовок 3" # Имя стиля для МС
+    #   issue_type_group: "Заголовок 4"   # Имя стиля для типа задачи
+    #   normal_text: "Обычный"           # Стиль для основного текста задачи
+    #   list_bullet: "Маркированный список" # Стиль для элементов списка задач (если нужно не просто дефис)
+    #   table_style: "Сетка таблицы"     # Имя стиля для таблицы компонентов
+
 # -----------------------------------------------------------------------------
 # 5. Logging Configuration (используется в main.py)
 # -----------------------------------------------------------------------------
