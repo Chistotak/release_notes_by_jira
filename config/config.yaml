@@ -156,6 +156,12 @@ output_formats:
     # Плейсхолдеры: {global_version}, {current_date_filename} (YYYY-MM-DD)
     output_filename_template: "ReleaseNotes_{global_version}_{current_date_filename}.docx"
     # output_directory: "./releases_output" # Также используется из args.output_dir или defaults
+
+    logo:
+      image_path: "config/templates/company_logo.png"
+      width_cm: 5
+      alignment: "center"
+
     styles:
       # ... другие стили ...
       table_style: "Normal Table"
