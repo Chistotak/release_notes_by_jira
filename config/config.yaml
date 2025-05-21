@@ -53,6 +53,8 @@ release_notes:
   title_template: "Release Notes - версия {global_version} - {current_date}"
   date_format: "%d.%m.%Y" # Формат для {current_date} в заголовке RN
   filter_issuelinks_by_project_prefixes: ["CCSSUP"]
+  exclude_issue_types:
+      - "Sub-task"
 
   # Определение секций в документе Release Notes
   sections:
@@ -63,11 +65,12 @@ release_notes:
       disable_grouping: false # По умолчанию false (т.е. группировка по МС будет)
       # group_by_issue_type имеет смысл только если disable_grouping = false
       group_by_issue_type: true # Группировать ли задачи по типу (Bug, Story и т.д.)
+      issue_header_template: "{key} {formatted_issuelinks} {formatted_client_info}"
       # Шаблон для отображения каждой задачи в этой секции.
       # {content} будет заменен значением из source_custom_field_id.
       # Остальные плейсхолдеры - из issue_fields_to_request.
       issue_display_template: |
-        {key}
+        {key} 
         {formatted_issuelinks} {formatted_client_info}
         {content}
 
@@ -76,8 +79,8 @@ release_notes:
       source_custom_field_id: "customfield_12001" # ID поля "Инструкция по установке"
       disable_grouping: false
       group_by_issue_type: false
+      #issue_header_template: "{key} {formatted_issuelinks_line_if_any} {formatted_client_info_line_if_any}"
       issue_display_template: |
-        {formatted_issuelinks}
         {content}
 
   # Конфигурация для таблицы микросервисов и их версий в начале Release Notes
@@ -154,24 +157,28 @@ output_formats:
     # Плейсхолдеры: {global_version}, {current_date_filename} (YYYY-MM-DD)
     output_filename_template: "ReleaseNotes_{global_version}_{current_date_filename}.docx"
     # output_directory: "./releases_output" # Также используется из args.output_dir или defaults
+
+    logo:
+      image_path: "config/templates/company_logo.png"
+      width_cm: 5
+      alignment: "center"
+
+        # config/config.yaml -> output_formats.word.styles
     styles:
-      # ... другие стили ...
-      table_style: "Normal Table"
-      list_bullet_first_line: "List Bullet"
-      list_bullet_multiline_indent: "Normal"
-    # Опционально: Маппинг на имена стилей Word.
-    # Если используется template_path с хорошо настроенными стилями по умолчанию
-    # (Заголовок 1, Заголовок 2 и т.д.), это может не понадобиться.
-    # Если стили в шаблоне называются иначе, или шаблон не используется, это может быть полезно.
-    # styles:
-    #   main_title: "Заголовок 1"       # Имя стиля в Word для главного заголовка
-    #   table_title: "Заголовок 2"     # Имя стиля для заголовка таблицы компонентов
-    #   section_title: "Заголовок 2"   # Имя стиля для заголовков секций
-    #   microservice_group: "Заголовок 3" # Имя стиля для МС
-    #   issue_type_group: "Заголовок 4"   # Имя стиля для типа задачи
-    #   normal_text: "Обычный"           # Стиль для основного текста задачи
-    #   list_bullet: "Маркированный список" # Стиль для элементов списка задач (если нужно не просто дефис)
-    #   table_style: "Сетка таблицы"     # Имя стиля для таблицы компонентов
+      main_title: "Heading 1"
+      table_title: "Heading 2"
+      section_title: "Heading 2"
+      microservice_group: "Heading 3"
+      issue_type_group: "Heading 4"
+      table_style: "Normal Table" # Стиль для таблицы компонентов
+
+          # Стили для элементов списка задач:
+      list_bullet_first_line: "List Bullet" # Стиль для первого параграфа "шапки" задачи (или контента, если шапки нет)
+          # Этот стиль должен сам добавлять маркер списка.
+      header_text_subsequent: "Normal"  # Стиль для 2-й и последующих строк "шапки" (если она многострочная).
+          # К этому стилю будет применен отступ. Текст будет жирным.
+      content_text: "Normal"            # Стиль для параграфов {content}.
+          # К нему будет применен отступ, если была шапка или это не первая строка контента.
 
 # -----------------------------------------------------------------------------
 # 5. Logging Configuration (используется в main.py)
