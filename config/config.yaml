@@ -52,6 +52,7 @@ jira:
 release_notes:
   title_template: "Release Notes - версия {global_version} - {current_date}"
   date_format: "%d.%m.%Y" # Формат для {current_date} в заголовке RN
+  filter_issuelinks_by_project_prefixes: ["CCSSUP"]
 
   # Определение секций в документе Release Notes
   sections:
@@ -66,7 +67,8 @@ release_notes:
       # {content} будет заменен значением из source_custom_field_id.
       # Остальные плейсхолдеры - из issue_fields_to_request.
       issue_display_template: |
-        {formatted_issuelinks} - {formatted_client_info}
+        {key}
+        {formatted_issuelinks} {formatted_client_info}
         {content}
 
     installation_instructions:
