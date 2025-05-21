@@ -53,6 +53,8 @@ release_notes:
   title_template: "Release Notes - версия {global_version} - {current_date}"
   date_format: "%d.%m.%Y" # Формат для {current_date} в заголовке RN
   filter_issuelinks_by_project_prefixes: ["CCSSUP"]
+  exclude_issue_types:
+      - "Sub-task"
 
   # Определение секций в документе Release Notes
   sections:
