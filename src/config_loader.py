@@ -5,87 +5,84 @@ from dotenv import load_dotenv
 from pathlib import Path
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # Логгер для этого модуля
 
-# Путь к файлу конфигурации относительно этого файла (config_loader.py)
-# __file__ -> src/config_loader.py
-# .parent -> src/
-# .parent -> release-notes-generator/ (корень проекта)
+# Пути определяются относительно текущего файла для надежности
 CONFIG_FILE_PATH = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
 ENV_FILE_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
 def load_config() -> dict:
     """
-    Загружает конфигурацию из YAML-файла.
+    Загружает основную конфигурацию скрипта из YAML-файла (config/config.yaml).
+
+    Файл конфигурации должен находиться по пути 'корень_проекта/config/config.yaml'.
+
+    Returns:
+        dict: Словарь с конфигурацией, загруженной из YAML-файла.
+
+    Raises:
+        FileNotFoundError: Если файл конфигурации 'config/config.yaml' не найден.
+        ValueError: Если файл конфигурации пуст, имеет неверный формат YAML,
+                    или загруженная конфигурация не является словарем Python.
+        Exception: Любые другие неожиданные ошибки при чтении или парсинге файла.
     """
     if not CONFIG_FILE_PATH.exists():
-        logger.critical(f"КРИТИЧНО: Файл конфигурации не найден по пути {CONFIG_FILE_PATH}")
+        # Это критическая ошибка, так как без конфига скрипт не может работать
+        logger.critical(f"Файл конфигурации не найден по пути: {CONFIG_FILE_PATH}")
         raise FileNotFoundError(f"Файл конфигурации не найден: {CONFIG_FILE_PATH}")
 
     logger.info(f"Загрузка конфигурации из файла: {CONFIG_FILE_PATH}")
     try:
         with open(CONFIG_FILE_PATH, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-        if not isinstance(config, dict):  # Проверка, что YAML успешно распарсился в словарь
-            logger.critical(f"КРИТИЧНО: Файл конфигурации {CONFIG_FILE_PATH} пуст или имеет неверный формат YAML.")
-            raise ValueError(f"Конфигурация из {CONFIG_FILE_PATH} не является словарем.")
+
+        # Проверка, что YAML успешно распарсился и является словарем
+        if not isinstance(config, dict):
+            logger.critical(
+                f"Содержимое файла конфигурации {CONFIG_FILE_PATH} пустое или не является словарем (получен тип: {type(config)}).")
+            raise ValueError(f"Конфигурация из {CONFIG_FILE_PATH} должна быть словарем.")
+
+        logger.debug("Файл конфигурации успешно загружен и распарсен.")
         return config
     except yaml.YAMLError as e:
-        logger.critical(f"КРИТИЧНО: Ошибка парсинга YAML файла {CONFIG_FILE_PATH}: {e}")
-        raise ValueError(f"Ошибка парсинга YAML: {e}")
+        logger.critical(f"Ошибка парсинга YAML в файле {CONFIG_FILE_PATH}: {e}")
+        raise ValueError(f"Ошибка парсинга YAML файла конфигурации: {e}")
     except Exception as e:
-        logger.critical(f"КРИТИЧНО: Неожиданная ошибка при загрузке конфигурации {CONFIG_FILE_PATH}: {e}")
-        raise
+        logger.critical(f"Неожиданная ошибка при загрузке или парсинге конфигурационного файла {CONFIG_FILE_PATH}: {e}",
+                        exc_info=True)
+        raise  # Пробрасываем исключение дальше
 
 
 def load_environment_variables() -> dict:
     """
-    Загружает переменные окружения из .env файла и системных переменных.
-    Переменные из .env файла имеют приоритет, если .env файл существует.
+    Загружает переменные окружения из файла .env (если он существует в корне проекта)
+    и из системного окружения. Переменные из .env имеют приоритет.
+
+    Файл .env должен находиться в корневой директории проекта.
+
+    Returns:
+        dict: Словарь, содержащий значения для 'JIRA_COOKIE_STRING' (может быть None, если не найдена).
     """
     env_vars = {}
     if ENV_FILE_PATH.exists():
         logger.info(f"Загрузка переменных окружения из файла: {ENV_FILE_PATH}")
         load_dotenv(dotenv_path=ENV_FILE_PATH, override=True)
     else:
-        logger.info(f"Файл {ENV_FILE_PATH} не найден. Используются только системные переменные окружения.")
+        logger.info(
+            f"Файл {ENV_FILE_PATH} не найден. Используются только системные переменные окружения (если установлены).")
 
-    # Загружаем чувствительные переменные, которые нам нужны
+    # Явно запрашиваем только те переменные, которые нам нужны
     env_vars['JIRA_COOKIE_STRING'] = os.getenv('JIRA_COOKIE_STRING')
-    # Можно добавить другие, если понадобятся (например, JIRA_USERNAME, JIRA_PASSWORD для Basic Auth)
+
+    # Закомментированные переменные, которые могут понадобиться для других методов аутентификации
+    # env_vars['JIRA_USERNAME'] = os.getenv('JIRA_USERNAME')
+    # env_vars['JIRA_PASSWORD'] = os.getenv('JIRA_PASSWORD')
 
     if not env_vars.get('JIRA_COOKIE_STRING'):
-        logger.warning(
-            "Предупреждение: Переменная окружения JIRA_COOKIE_STRING не установлена. Аутентификация JIRA может не работать.")
+        # Это предупреждение, так как main.py может запросить куку интерактивно
+        logger.warning("Переменная окружения JIRA_COOKIE_STRING не установлена ни в .env, ни в системном окружении.")
+    else:
+        logger.debug("JIRA_COOKIE_STRING успешно загружена из переменных окружения.")
 
     return env_vars
-
-
-if __name__ == '__main__':
-    # Настройка логирования для теста этого модуля
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-    logger.info("Тестирование загрузчика конфигурации...")
-    try:
-        app_config = load_config()
-        logger.info("Конфигурация из config.yaml успешно загружена:")
-        # Выводим только часть конфига для краткости
-        logger.debug(f"JIRA URL: {app_config.get('jira', {}).get('server_url')}")
-        logger.debug(
-            f"Markdown output template: {app_config.get('output_formats', {}).get('markdown', {}).get('output_filename_template')}")
-
-        env_variables = load_environment_variables()
-        logger.info("Переменные окружения загружены:")
-        for key, value in env_variables.items():
-            # Скрываем значение куки в логе
-            if "COOKIE" in key.upper() and value:
-                logger.debug(f"{key}: ****** (длина: {len(value)})")
-            else:
-                logger.debug(f"{key}: {value}")
-        logger.info("Тестирование загрузчика конфигурации завершено.")
-
-    except (FileNotFoundError, ValueError) as e:
-        logger.error(f"Ошибка в процессе тестирования загрузчика: {e}")
-    except Exception as e:
-        logger.error(f"Неожиданная ошибка в процессе тестирования загрузчика: {e}", exc_info=True)
