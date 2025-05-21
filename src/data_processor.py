@@ -98,13 +98,18 @@ def _parse_microservice_versions(
                     logger.warning(f"Нет маппинга для префикса МС '{prefix}' из '{version_name_str}'.")
             except IndexError:
                 logger.warning(f"Ошибка индекса группы при парсинге '{version_name_str}' с '{mv_pattern_str}'")
-        # else:
-        # logger.debug(f"Строка '{version_name_str}' не матчит паттерн МС '{mv_pattern_str}'.")
     return microservices
 
 
 def _extract_field_value_for_template(field_name_or_id: str, raw_value: any) -> any:
-    if raw_value is None: return None
+    """
+    Извлекает и форматирует значение поля для использования в плейсхолдерах шаблона.
+    Возвращает None, если значение отсутствует или не может быть meaningfully представлено.
+    """
+    if raw_value is None:
+        return None
+
+        # Специальная обработка для стандартных полей JIRA, которые часто являются объектами
     if field_name_or_id == "issuetype" and isinstance(raw_value, dict):
         return raw_value.get("name")
     elif field_name_or_id == "priority" and isinstance(raw_value, dict):
@@ -118,15 +123,36 @@ def _extract_field_value_for_template(field_name_or_id: str, raw_value: any) -> 
     elif field_name_or_id == "reporter" and isinstance(raw_value, dict):
         return raw_value.get("displayName") or raw_value.get("name")
     elif isinstance(raw_value, list):
-        if not raw_value: return None  # Пустой список тоже None для шаблона, если не хотим пустые "Labels: "
-        if all(isinstance(item, dict) for item in raw_value):
-            return ", ".join(filter(None, [item.get('name') or item.get('value') for item in raw_value]))
-        elif all(isinstance(item, str) for item in raw_value):
-            return ", ".join(filter(None, raw_value))
-        else:
-            return ", ".join(filter(None, [str(item) for item in raw_value]))
-    elif isinstance(raw_value, dict):
+        if not raw_value:  # Пустой список
+            return None
+
+            # Для fixVersions мы хотим сохранить список объектов для дальнейшего парсинга,
+        # но если кто-то захочет использовать {fixVersions} в шаблоне, вернем строку имен.
+        # Однако, основная логика парсинга версий должна использовать сырой список.
+        # Поэтому, если это поле не 'fixVersions', то обрабатываем как раньше.
+        if field_name_or_id != "fixVersions":  # Для labels, components и других списков (кроме fixVersions)
+            if all(isinstance(item, dict) for item in raw_value):
+                # Список словарей (например, components)
+                names = [item.get('name') or item.get('value') for item in raw_value if
+                         item.get('name') or item.get('value')]
+                return ", ".join(names) if names else None
+            elif all(isinstance(item, str) for item in raw_value):
+                # Список строк (например, labels)
+                return ", ".join(item for item in raw_value if item) if any(raw_value) else None
+            else:
+                # Смешанный список или список других типов - просто преобразуем в строки
+                str_items = [str(item) for item in raw_value if item is not None]
+                return ", ".join(str_items) if str_items else None
+        else:  # Если это fixVersions, возвращаем сырой список (он будет обработан отдельно)
+            # Но если кто-то использует {fixVersions} в шаблоне, это вернет список.
+            # Лучше для шаблона {fixVersions} тоже возвращать строку имен.
+            names = [item.get('name') for item in raw_value if isinstance(item, dict) and item.get('name')]
+            return ", ".join(names) if names else None
+
+    elif isinstance(raw_value, dict):  # Для кастомных полей-объектов или других
         return raw_value.get('value') or raw_value.get('name') or str(raw_value)
+
+        # Для простых типов (строка, число, булево)
     return raw_value
 
 
@@ -139,6 +165,7 @@ def process_jira_issues(issues_data: list[dict], config: dict) -> dict:
         "microservices_summary": [],
         "sections_data": {}
     }
+
     version_cfg = config.get('version_parsing', {})
     global_version_patterns = version_cfg.get('global_version', {}).get('extraction_patterns', [])
     if not global_version_patterns:
@@ -176,33 +203,26 @@ def process_jira_issues(issues_data: list[dict], config: dict) -> dict:
 
     all_microservices_in_release = {}
     jira_fields_names_to_extract = config.get('jira', {}).get('issue_fields_to_request', [])
-    if "key" not in jira_fields_names_to_extract:  # Убедимся, что key всегда запрашивается неявно, если забыли
-        logger.debug("'key' не был в jira.issue_fields_to_request, добавляем его для внутренней логики.")
-        # Это не добавит его в реальный запрос к JIRA, если его там нет,
-        # но гарантирует, что мы попытаемся его извлечь из `fields_from_jira_api`
 
     for issue_raw_data in issues_data:
-        task_key = issue_raw_data.get('key')  # Получаем ключ задачи из корневого уровня объекта задачи
+        task_key = issue_raw_data.get('key')
         if not task_key:
-            logger.warning(
-                f"Обнаружена задача без ключа ('key') в данных от JIRA: {str(issue_raw_data)[:100]}... Пропуск.")
+            logger.warning(f"Задача без ключа: {str(issue_raw_data)[:100]}... Пропуск.")
             continue
-
         fields_from_jira_api = issue_raw_data.get('fields', {})
         if not fields_from_jira_api:
-            logger.warning(f"Задача {task_key} не содержит блока 'fields'. Пропуск.")
+            logger.warning(f"Задача {task_key} без 'fields'. Пропуск.")
             continue
 
         logger.debug(f"Обработка полей для {task_key}: '{fields_from_jira_api.get('summary', '')}'")
-
         task_fields_for_template = {"key": task_key}  # Ключ задачи всегда добавляется
+
         for field_id_from_config in jira_fields_names_to_extract:
-            # Пропускаем 'key', так как он уже добавлен и не находится в 'fields'
-            if field_id_from_config == "key":
-                continue
+            if field_id_from_config == "key": continue  # Уже добавили
 
             raw_value_from_jira = fields_from_jira_api.get(field_id_from_config)
             template_key_name = field_id_from_config
+
             if field_id_from_config == "issuetype":
                 template_key_name = "issuetype_name"
             elif field_id_from_config == "priority":
@@ -216,16 +236,27 @@ def process_jira_issues(issues_data: list[dict], config: dict) -> dict:
             elif field_id_from_config == "resolution":
                 template_key_name = "resolution_name"
 
-            if field_id_from_config == "issuelinks":  # Сохраняем сырые данные issuelinks
+            # Для issuelinks и fixVersions мы хотим сохранить СЫРЫЕ данные (список объектов)
+            # под их оригинальными именами для внутренней обработки, если они запрошены.
+            # _extract_field_value_for_template вернет строку для них, если кто-то захочет их в шаблон.
+            if field_id_from_config == "issuelinks" or field_id_from_config == "fixVersions":
                 task_fields_for_template[template_key_name] = raw_value_from_jira
+                # Если нужно и отформатированное значение для прямого использования в шаблоне:
+                if field_id_from_config == "fixVersions":
+                    task_fields_for_template["fixVersions_names"] = _extract_field_value_for_template(
+                        field_id_from_config, raw_value_from_jira)
+                # Для issuelinks форматирование идет в formatted_issuelinks ниже
                 continue
+
             task_fields_for_template[template_key_name] = _extract_field_value_for_template(field_id_from_config,
                                                                                             raw_value_from_jira)
 
         if 'summary' not in task_fields_for_template:  # Гарантируем наличие summary
             task_fields_for_template['summary'] = fields_from_jira_api.get('summary', 'Без заголовка')
 
-        raw_issuelinks_data_for_task = fields_from_jira_api.get("issuelinks")
+        # --- Формирование formatted_issuelinks ---
+        # Используем сырые данные из task_fields_for_template, если "issuelinks" был в запрошенных полях
+        raw_issuelinks_data_for_task = task_fields_for_template.get("issuelinks")
         formatted_links_text_list = []
         if isinstance(raw_issuelinks_data_for_task, list):
             for link_item in raw_issuelinks_data_for_task:
@@ -242,141 +273,209 @@ def process_jira_issues(issues_data: list[dict], config: dict) -> dict:
                     linked_issue_key_str = linked_issue_obj.get("key")
                 if direction_verb_str and linked_issue_key_str:
                     formatted_links_text_list.append(f"{direction_verb_str.capitalize()} {linked_issue_key_str}")
+
         if formatted_links_text_list:
             task_fields_for_template["formatted_issuelinks"] = "Связанные задачи: " + "; ".join(
-                formatted_links_text_list)
+                sorted(formatted_links_text_list))  # Сортируем для порядка
         else:
             task_fields_for_template["formatted_issuelinks"] = None
 
+            # --- Формирование client_name и formatted_client_info ---
+        # Используем сырые данные из task_fields_for_template, если "customfield_12902" был в запрошенных полях
+        client_contract_full_string = task_fields_for_template.get("customfield_12902")
+        client_name_extracted = None
+
+        logger.debug(
+            f"Для задачи {task_key}: Попытка извлечь имя клиента из customfield_12902: '{client_contract_full_string}'")
+        if isinstance(client_contract_full_string, str) and client_contract_full_string.strip():
+            # Сначала пытаемся отсечь всё после " - " если он есть
+            parts_by_hyphen = client_contract_full_string.split(" - ", 1)
+            potential_client_name_part = parts_by_hyphen[0].strip()
+            logger.debug(f"  Часть до ' - ' (или вся строка): '{potential_client_name_part}'")
+
+            # Теперь в этой части ищем "#"
+            if "#" in potential_client_name_part:
+                client_name_extracted = potential_client_name_part.split("#", 1)[0].strip()
+                logger.debug(f"    Отсекли по '#', результат: '{client_name_extracted}'")
+            else:
+                # Если '#' не было в этой части, то эта часть и есть имя клиента
+                client_name_extracted = potential_client_name_part
+                logger.debug(
+                    f"    Символ '#' не найден в '{potential_client_name_part}', используем ее как имя: '{client_name_extracted}'")
+
+            # Если после всех манипуляций осталась пустая строка, считаем, что имя не извлечено
+            if not client_name_extracted.strip():
+                client_name_extracted = None
+                logger.debug(f"    Имя клиента после очистки оказалось пустым, сброшено в None.")
+        else:
+            logger.debug(f"  Строка customfield_12902 пустая, None или не строка. Имя клиента не будет извлечено.")
+
+        task_fields_for_template["client_name"] = client_name_extracted
+        logger.debug(f"  Итоговое client_name для шаблона: {task_fields_for_template['client_name']}")
+
+        if client_name_extracted:  # Проверяем, что не None и не пустая строка (strip уже был)
+            task_fields_for_template["formatted_client_info"] = f"Клиент: {client_name_extracted}"
+        else:
+            task_fields_for_template["formatted_client_info"] = None
+        logger.debug(f"  formatted_client_info для шаблона: {task_fields_for_template['formatted_client_info']}")
+
+        # --- Парсинг микросервисов ---
+        # Используем СЫРОЙ список объектов fixVersions из fields_from_jira_api
+        raw_fix_versions_list = fields_from_jira_api.get('fixVersions', [])
         raw_global_version_strings_for_this_issue = _get_raw_global_version_strings_from_issue(issue_raw_data,
                                                                                                global_version_patterns)
+
         task_microservices_parsed_list = []
         if can_parse_microservices:
             task_microservices_parsed_list = _parse_microservice_versions(
-                fields_from_jira_api.get('fixVersions', []),
+                raw_fix_versions_list,  # Передаем сырой список объектов
                 raw_global_version_strings_for_this_issue,
                 mv_pattern, mv_prefix_idx, mv_version_idx, service_mapping, global_version_patterns
             )
         linked_ms_names_str = ", ".join(sorted(list(set(name for _, name, _ in task_microservices_parsed_list))))
         task_fields_for_template["linked_microservices_names"] = linked_ms_names_str if linked_ms_names_str else None
 
+        # --- Распределение по секциям ---
         for section_key, current_section_proc_data in processed_data["sections_data"].items():
             source_cf_id = current_section_proc_data.get('source_custom_field_id')
-            main_content = fields_from_jira_api.get(source_cf_id)
+            main_content = fields_from_jira_api.get(source_cf_id)  # Берем контент из сырых полей JIRA
+
             if main_content is not None:
-                task_data_for_section_item = task_fields_for_template.copy()
-                task_data_for_section_item["content"] = main_content
-                # Гарантируем базовые поля еще раз, на всякий случай если они не пришли из task_fields_for_template
-                # (хотя должны были, если 'key' и 'summary' всегда есть)
-                if "key" not in task_data_for_section_item: task_data_for_section_item["key"] = task_key
-                if "summary" not in task_data_for_section_item: task_data_for_section_item[
+                item_data_for_section = task_fields_for_template.copy()  # Копируем все собранные поля
+                item_data_for_section["content"] = main_content  # Добавляем специфичный для секции {content}
+
+                # Гарантируем наличие базовых полей еще раз, на всякий случай
+                if "key" not in item_data_for_section: item_data_for_section["key"] = task_key
+                if "summary" not in item_data_for_section: item_data_for_section[
                     "summary"] = task_fields_for_template.get('summary', 'N/A')
-                if "issuetype_name" not in task_data_for_section_item: task_data_for_section_item[
+                if "issuetype_name" not in item_data_for_section: item_data_for_section[
                     "issuetype_name"] = task_fields_for_template.get('issuetype_name', 'N/A')
 
                 if current_section_proc_data.get("disable_grouping"):
-                    is_already_added = any(
-                        t.get("key") == task_key for t in current_section_proc_data.get("tasks_flat_list", []))
-                    if not is_already_added:
-                        current_section_proc_data["tasks_flat_list"].append(task_data_for_section_item)
+                    # Проверка на дублирование для плоского списка
+                    if not any(t.get("key") == task_key for t in current_section_proc_data.get("tasks_flat_list", [])):
+                        current_section_proc_data["tasks_flat_list"].append(item_data_for_section)
                         logger.debug(f"Задача {task_key} добавлена в плоский список секции '{section_key}'.")
-                elif task_microservices_parsed_list:
-                    unique_microservices_for_task_in_section = set()  # Для избежания дублирования задачи в одной секции под разными МС, если она привязана к одному МС несколько раз (нетипично)
+                elif task_microservices_parsed_list:  # Группировка включена И есть МС у задачи
+                    unique_ms_added_to_section_for_this_task = set()
                     for prefix, service_full_name, ms_version in task_microservices_parsed_list:
+                        # Обновляем all_microservices_in_release
                         if (prefix, service_full_name) not in all_microservices_in_release:
                             all_microservices_in_release[(prefix, service_full_name)] = set()
                         all_microservices_in_release[(prefix, service_full_name)].add(ms_version)
 
-                        if service_full_name not in unique_microservices_for_task_in_section:
-                            service_group = current_section_proc_data["microservices"][service_full_name]
-                            task_type = task_data_for_section_item.get("issuetype_name", "Неизвестный тип")
+                        # Добавляем задачу в секцию под этим МС только один раз
+                        if service_full_name not in unique_ms_added_to_section_for_this_task:
+                            service_group_in_section = current_section_proc_data["microservices"][service_full_name]
+                            task_type_for_grouping = item_data_for_section.get("issuetype_name", "Неизвестный тип")
+
                             if current_section_proc_data.get("group_by_issue_type"):
-                                service_group["issue_types"][task_type].append(task_data_for_section_item)
+                                service_group_in_section["issue_types"][task_type_for_grouping].append(
+                                    item_data_for_section)
                             else:
-                                service_group["tasks_without_type_grouping"].append(task_data_for_section_item)
-                            unique_microservices_for_task_in_section.add(service_full_name)
+                                service_group_in_section["tasks_without_type_grouping"].append(item_data_for_section)
+                            unique_ms_added_to_section_for_this_task.add(service_full_name)
                             logger.debug(
                                 f"Задача {task_key} добавлена в '{section_key}' (групп. по МС) для МС '{service_full_name}'.")
 
-    sorted_ms_tuples = sorted(all_microservices_in_release.items(), key=lambda item: item[0][1])
+    # --- Формирование итогового списка микросервисов для summary ---
+    sorted_ms_tuples = sorted(all_microservices_in_release.items(),
+                              key=lambda i: i[0][1])  # Сортировка по полному имени МС
     for (prefix, name), version_set in sorted_ms_tuples:
-        version_str = ", ".join(sorted(list(version_set)))
+        version_str = ", ".join(sorted(list(version_set)))  # Версии внутри одного МС тоже сортируем
         processed_data["microservices_summary"].append({"prefix": prefix, "name": name, "version": version_str})
 
     logger.info("Обработка задач завершена.")
     return processed_data
 
 
-# Блок if __name__ == '__main__': остается таким же, как в предыдущей полной версии data_processor.py.
-# Убедитесь, что mock_config_for_dp_test["jira"]["issue_fields_to_request"] содержит "key".
+# Блок if __name__ == '__main__' (для тестирования)
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    mock_config_for_dp_test = {
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    mock_config = {
         "jira": {
-            "issue_fields_to_request": [
-                "key", "summary", "issuetype", "priority", "assignee", "reporter",
-                "created", "updated", "labels", "components", "status", "resolution",
-                "fixVersions", "customfield_10400", "customfield_12001", "issuelinks"
-            ]
-        },
-        "release_notes": {
-            "date_format": "%d.%m.%Y",
-            "sections": {
-                "changes": {"title": "Изменения", "source_custom_field_id": "customfield_10400",
-                            "group_by_issue_type": True, "disable_grouping": False},
-                "install_guide": {"title": "Инструкция", "source_custom_field_id": "customfield_12001",
-                                  "group_by_issue_type": False, "disable_grouping": False},
-                "all_flat": {"title": "Все задачи плоско", "source_custom_field_id": "customfield_10400",
-                             "disable_grouping": True}
-            }
-        },
+            "issue_fields_to_request": ["key", "summary", "issuetype", "fixVersions", "customfield_10400", "issuelinks",
+                                        "customfield_12902"]},
+        "release_notes": {"sections": {
+            "changes": {"title": "Изменения", "source_custom_field_id": "customfield_10400",
+                        "group_by_issue_type": True, "disable_grouping": False},
+        }},
         "version_parsing": {
-            "global_version": {"extraction_patterns": ['^(.*?)\\s*\\(global\\)$', '^(\\d+\\.\\d+\\.\\d+)$']},
-            "microservice_version": {"extraction_pattern": '^([A-Z]+)(\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9_]+)*)$',
-                                     "prefix_group_index": 1, "version_group_index": 2},
-            "microservice_mapping": {"IN": "Integration Service", "AUTH": "Auth Service", "CORE": "Core Platform"}
+            "global_version": {"extraction_patterns": ['^(.*?)\\s*\\(global\\)$']},
+            "microservice_version": {"extraction_pattern": '^([A-Z]+)(\\d+\\.\\d+)$', "prefix_group_index": 1,
+                                     "version_group_index": 2},
+            "microservice_mapping": {"IN": "Integration", "AUTH": "Auth"}
         }
     }
-    mock_issues_data_for_dp_test = [
-        {"key": "PROJ-101", "fields": {"summary": "Func X", "issuetype": {"name": "Story"},
-                                       "fixVersions": [{"name": "2.5.0 (global)"}, {"name": "IN2.5.0"}],
-                                       "customfield_10400": "Desc X.", "issuelinks": [
-                {"id": "101", "type": {"outward": "blocks"}, "outwardIssue": {"key": "PROJ-200"}}]}},
-        {"key": "PROJ-102",
-         "fields": {"summary": "Bug Y", "issuetype": {"name": "Bug"}, "fixVersions": [{"name": "IN2.5.1"}],
-                    "customfield_10400": "Desc Y."}},
-        {"key": "PROJ-103",
-         "fields": {"summary": "No key task in fields, but has root key", "fixVersions": [{"name": "CORE1.0.0"}],
-                    "customfield_10400": "Content 103"}},  # Пример без key в fields
-        {"key": None, "fields": {"summary": "Task with None key at root", "fixVersions": [{"name": "CORE1.0.1"}],
-                                 "customfield_10400": "Content NoneKey"}}  # Пример с None key на верхнем уровне
+    mock_issues = [
+        {"key": "T1", "fields": {
+            "summary": "S1", "issuetype": {"name": "Story"},
+            "fixVersions": [{"name": "1.0 (global)"}, {"name": "IN1.0"}],
+            "customfield_10400": "C1",
+            "customfield_12902": "Client A #1 - Details",  # <-- Сработает отсечение по #
+            "issuelinks": [{"type": {"outward": "blocks"}, "outwardIssue": {"key": "T2"}}]
+        }},
+        {"key": "T2", "fields": {
+            "summary": "S2", "issuetype": {"name": "Bug"},
+            "fixVersions": [{"name": "IN1.0"}],
+            "customfield_10400": "C2",
+            "customfield_12902": "Client B - Details"  # <-- Сработает отсечение по " - "
+        }},
+        {"key": "T3", "fields": {
+            "summary": "S3", "issuetype": {"name": "Task"},
+            "fixVersions": [{"name": "AUTH1.1"}],
+            "customfield_10400": "C3",
+            "customfield_12902": "Client C"  # <-- Нет разделителей, возьмется вся строка
+        }},
+        {"key": "T4", "fields": {
+            "summary": "S4", "issuetype": {"name": "Task"},
+            "fixVersions": [{"name": "AUTH1.1"}],
+            "customfield_10400": "C4",
+            "customfield_12902": "#Client D with leading hash"
+            # <-- Должен извлечь пустую строку, formatted_client_info будет None
+        }},
+        {"key": "T5", "fields": {
+            "summary": "S5", "issuetype": {"name": "Task"},
+            "fixVersions": [{"name": "AUTH1.1"}],
+            "customfield_10400": "C5",
+            "customfield_12902": None  # <-- None значение
+        }}
     ]
-    logger.info("Запуск тестовой обработки data_processor...")
-    processed_result = process_jira_issues(mock_issues_data_for_dp_test, mock_config_for_dp_test)
-    import json
+    logger.info("Тест data_processor (formatted_client_info)...")
+    result = process_jira_issues(mock_issues, mock_config)
+    import json;
 
-    print("\n--- Результат обработки data_processor (JSON) ---")
-    print(json.dumps(processed_result, indent=2, ensure_ascii=False))
+    # print(json.dumps(result, indent=2, ensure_ascii=False)) # Раскомментируй для полного вывода
 
-    # Проверка, что PROJ-101 имеет ключ
-    proj101_data_ch = next(t for t_list in
-                           processed_result["sections_data"]["changes"]["microservices"]["Integration Service"][
-                               "issue_types"].values() for t in t_list if t["key"] == "PROJ-101")
-    assert proj101_data_ch["key"] == "PROJ-101"
-    assert "Связанные задачи: Blocks PROJ-200" in proj101_data_ch["formatted_issuelinks"]
+    # Проверка client_name и formatted_client_info
+    changes_section_data = result["sections_data"]["changes"]
 
-    # Проверка, что PROJ-103 (без key в fields, но есть на верхнем уровне) обработался и есть ключ
-    proj103_data_ch = next(t for t_list in
-                           processed_result["sections_data"]["changes"]["microservices"]["Core Platform"][
-                               "issue_types"].values() for t in t_list if
-                           t.get("summary") == "No key task in fields, but has root key")
-    assert proj103_data_ch["key"] == "PROJ-103"
+    tasks_in_IN_story = changes_section_data["microservices"]["Integration"]["issue_types"]["Story"]
+    task1_data = next(t for t in tasks_in_IN_story if t["key"] == "T1")
+    assert task1_data["client_name"] == "Client A", f"T1 client_name: {task1_data['client_name']}"
+    assert task1_data[
+               "formatted_client_info"] == "Клиент: Client A", f"T1 formatted_client_info: {task1_data['formatted_client_info']}"
 
-    # Проверка плоского списка
-    assert len(processed_result["sections_data"]["all_flat"][
-                   "tasks_flat_list"]) >= 2  # PROJ-101, PROJ-102, PROJ-103 (если у них есть customfield_10400)
-    flat_proj101 = next(
-        t for t in processed_result["sections_data"]["all_flat"]["tasks_flat_list"] if t["key"] == "PROJ-101")
-    assert flat_proj101["key"] == "PROJ-101"
+    tasks_in_IN_bug = changes_section_data["microservices"]["Integration"]["issue_types"]["Bug"]
+    task2_data = next(t for t in tasks_in_IN_bug if t["key"] == "T2")
+    assert task2_data["client_name"] == "Client B", f"T2 client_name: {task2_data['client_name']}"
+    assert task2_data[
+               "formatted_client_info"] == "Клиент: Client B", f"T2 formatted_client_info: {task2_data['formatted_client_info']}"
 
-    logger.info("Тестовая обработка data_processor завершена.")
+    tasks_in_AUTH_task = changes_section_data["microservices"]["Auth"]["issue_types"]["Task"]
+    task3_data = next(t for t in tasks_in_AUTH_task if t["key"] == "T3")
+    assert task3_data["client_name"] == "Client C", f"T3 client_name: {task3_data['client_name']}"
+    assert task3_data[
+               "formatted_client_info"] == "Клиент: Client C", f"T3 formatted_client_info: {task3_data['formatted_client_info']}"
+
+    task4_data = next(t for t in tasks_in_AUTH_task if t["key"] == "T4")
+    assert task4_data["client_name"] is None, f"T4 client_name: {task4_data['client_name']}"  # После "#" ничего нет
+    assert task4_data[
+               "formatted_client_info"] is None, f"T4 formatted_client_info: {task4_data['formatted_client_info']}"
+
+    task5_data = next(t for t in tasks_in_AUTH_task if t["key"] == "T5")
+    assert task5_data["client_name"] is None, f"T5 client_name: {task5_data['client_name']}"
+    assert task5_data[
+               "formatted_client_info"] is None, f"T5 formatted_client_info: {task5_data['formatted_client_info']}"
+
+    logger.info("Тест data_processor (formatted_client_info) завершен.")
