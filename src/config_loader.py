@@ -4,8 +4,27 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 import logging
+import sys
 
 logger = logging.getLogger(__name__)  # Логгер для этого модуля
+
+def get_correct_path(relative_path_str: str) -> Path:
+    """
+    Возвращает корректный путь к ресурсу, работающий как в режиме скрипта,
+    так и в собранном PyInstaller приложении.
+    """
+    try:
+        # Если приложение собрано PyInstaller (_MEIPASS есть у onefile и onedir сборок)
+        base_path = Path(sys._MEIPASS)
+        logger.debug(f"PyInstaller режим: _MEIPASS = {base_path}")
+    except AttributeError:
+        # Если запущено как обычный Python скрипт
+        # Путь от корня проекта (где лежит папка src, config и т.д.)
+        base_path = Path(__file__).resolve().parent.parent
+        logger.debug(f"Режим скрипта: base_path = {base_path} (относительно {__file__})")
+    final_path = base_path / relative_path_str
+    logger.debug(f"get_correct_path: relative='{relative_path_str}', absolute='{final_path}'")
+    return final_path
 
 # Пути определяются относительно текущего файла для надежности
 CONFIG_FILE_PATH = Path(__file__).resolve().parent.parent / "config" / "config.yaml"

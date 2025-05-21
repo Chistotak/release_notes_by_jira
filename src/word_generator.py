@@ -1,14 +1,40 @@
 # src/word_generator.py
 import logging
 import re
-from typing import Optional, List, Dict  # Добавляем Optional, List, Dict для аннотаций
+from typing import Optional, List, Dict  # Для аннотаций типов
 
-from docx import Document
+from docx import Document  # type: ignore # Используем type: ignore, если линтер жалуется на Document из python-docx
+from docx.document import Document as DocxDocument  # Более явный импорт для типа Document
 from docx.shared import Pt, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+# from docx.enum.text import WD_ALIGN_PARAGRAPH # Если понадобится выравнивание
+
+# Импортируем get_correct_path из config_loader
+# Это предполагает, что config_loader.py находится в той же директории src
+# и get_correct_path не является приватной (не начинается с _)
+try:
+    from src.config_loader import get_correct_path
+except ImportError:
+    # Фоллбэк, если запускаем word_generator отдельно или структура другая
+    # (этот фоллбэк не идеален для собранного приложения, но поможет при автономном тесте модуля)
+    import sys
+    from pathlib import Path
+
+
+    def get_correct_path(relative_path_str: str) -> Path:
+        if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            # PyInstaller создает временную папку и сохраняет путь в sys._MEIPASS
+            return Path(sys._MEIPASS) / relative_path_str
+        else:
+            return Path(__file__).resolve().parent.parent / relative_path_str
+
+
+    logger = logging.getLogger(__name__)  # Определяем логгер здесь, если импорт выше не сработал
+    logger.warning("Не удалось импортировать get_correct_path из src.config_loader. Используется локальный фоллбэк.")
 
 logger = logging.getLogger(__name__)
 
+# Имена стилей Word (могут быть переопределены в config.yaml)
 STYLE_NORMAL = 'Normal'
 STYLE_HEADING_1 = 'Heading 1'
 STYLE_HEADING_2 = 'Heading 2'
@@ -18,7 +44,12 @@ STYLE_LIST_BULLET = 'List Bullet'
 STYLE_TABLE_DEFAULT = 'Table Grid'
 
 
-def _format_template_string(template_str: str, data_dict: Dict) -> str:  # Используем Dict
+def _format_template_string(template_str: str, data_dict: Dict) -> str:
+    """
+    Заменяет плейсхолдеры вида {ключ} в строке-шаблоне значениями из словаря data_dict.
+    Если плейсхолдер не найден или его значение None, он заменяется на пустую строку.
+    """
+
     def replace_match(match_obj):
         key_in_placeholder = match_obj.group(1)
         value_from_data = data_dict.get(key_in_placeholder)
@@ -27,198 +58,230 @@ def _format_template_string(template_str: str, data_dict: Dict) -> str:  # Ис�
     return re.sub(r"\{([\w_.-]+)\}", replace_match, template_str)
 
 
-def _add_heading_with_style(document: Document, text: Optional[str], level: int,
-                            default_style_name: str):  # Используем Optional и Document
+def _add_heading_styled(document: DocxDocument, text: Optional[str], level: int, default_style_name: str):
+    """
+    Добавляет заголовок в документ, используя указанный уровень для определения
+    стандартного стиля 'Heading X' и позволяя переопределить его стилем из конфига.
+    """
     if not text or not text.strip():
-        logger.debug("Пропуск добавления пустого заголовка.")
+        logger.debug("Пропуск добавления пустого заголовка в Word.")
         return
-    actual_level = max(1, min(4, level))
+
+    # Уровни в python-docx для add_heading: 0 для 'Title', 1 для 'Heading 1', ...
+    # Мы ожидаем level 1-4 от наших настроек для Heading 1-4.
+    doc_level = max(1, min(4, level))  # Убедимся, что уровень в допустимых пределах для Heading 1-4
+
     try:
-        heading_paragraph = document.add_heading(level=actual_level)
-        heading_paragraph.text = text.strip()
-        if default_style_name and default_style_name not in [f"Heading {i}" for i in range(1, 5)]:
+        heading_paragraph = document.add_heading(text='', level=doc_level)  # Создаем заголовок нужного уровня
+        heading_paragraph.text = text.strip()  # Заполняем текст
+
+        # Если в конфиге указан стиль и он отличается от стандартного "Heading X"
+        # или если мы хотим быть уверены, что именно этот стиль применен.
+        if style_name_from_config:
             try:
-                heading_paragraph.style = default_style_name
-                logger.debug(f"Применен кастомный стиль заголовка '{default_style_name}' для текста: '{text[:30]}...'")
-            except KeyError:
+                # Если стиль из конфига совпадает со стандартным для этого уровня,
+                # то он уже применен через add_heading(level=...).
+                # Но явное применение не повредит и полезно для кастомных стилей.
+                heading_paragraph.style = style_name_from_config
+                logger.debug(f"К заголовку '{text[:30]}...' применен стиль '{style_name_from_config}'.")
+            except KeyError:  # Если стиль с таким именем не найден в документе/шаблоне
                 logger.warning(
-                    f"Стиль заголовка '{default_style_name}' не найден. Использован стандартный Heading {actual_level}.")
+                    f"Стиль Word '{style_name_from_config}' не найден для заголовка '{text[:30]}...'. Использован стандартный стиль для уровня {doc_level}.")
+        # Если style_name_from_config не указан, используется стиль по умолчанию для document.add_heading(level=...)
     except Exception as e:
-        logger.error(f"Ошибка при добавлении заголовка '{text[:30]}...': {e}")
+        logger.error(f"Ошибка при добавлении заголовка Word '{text[:30]}...': {e}")
 
 
-def _add_task_entry(document: Document, template_str: str, task_data_dict: Dict, list_item_style: str,
-                    subsequent_line_style: Optional[str] = None,
-                    indent_pt: Optional[Pt] = None):  # Используем Optional и Pt
-    if indent_pt is None:  # Устанавливаем значение по умолчанию для Pt, если оно None
-        indent_pt = Pt(20)
+def _add_task_entry_to_document(
+        document: DocxDocument,
+        issue_template_str: str,
+        task_data: Dict,
+        first_line_style_name: str,
+        subsequent_line_style_name: str,
+        subsequent_line_indent: Optional[Pt] = None
+):
+    """
+    Добавляет запись о задаче в Word документ, форматируя ее по шаблону.
+    Каждая строка из отформатированного шаблона становится новым параграфом.
+    """
+    formatted_entry = _format_template_string(issue_template_str, task_data)
+    lines = [line.strip() for line in formatted_entry.strip().splitlines() if line.strip()]  # Убираем пустые строки
 
-    formatted_task_entry_str = _format_template_string(template_str, task_data_dict)
-    lines_of_task_entry = formatted_task_entry_str.strip().splitlines()
-
-    if not lines_of_task_entry:
-        logger.debug(f"Задача {task_data_dict.get('key', 'UKNOWN_KEY')} не дала видимого контента по шаблону.")
+    if not lines:
+        logger.debug(f"Задача {task_data.get('key', 'UKNOWN_KEY')} не дала контента по шаблону для Word.")
+        # Можно добавить параграф-плейсхолдер, если нужно
+        # document.add_paragraph(f"[{task_data.get('key','TASK')}: нет данных по шаблону]", style=first_line_style_name)
         return
 
-    first_line = True
-    for line_text in lines_of_task_entry:
-        stripped_line = line_text.strip()
-        if not stripped_line and not first_line:
-            continue
-
-        if first_line:
-            p = document.add_paragraph(stripped_line, style=list_item_style)
-            first_line = False
-        else:
-            style_to_use = subsequent_line_style if subsequent_line_style else STYLE_NORMAL
-            p = document.add_paragraph(stripped_line, style=style_to_use)
-            if style_to_use == STYLE_NORMAL and indent_pt is not None:
-                p.paragraph_format.left_indent = indent_pt
+    for i, line_text in enumerate(lines):
+        if i == 0:  # Первая строка
+            p = document.add_paragraph(line_text, style=first_line_style_name)
+        else:  # Последующие строки
+            p = document.add_paragraph(line_text, style=subsequent_line_style_name)
+            if subsequent_line_style_name == STYLE_NORMAL and subsequent_line_indent:
+                # Применяем отступ только если это "Normal" стиль и отступ задан
+                try:
+                    p.paragraph_format.left_indent = subsequent_line_indent
+                except Exception as e:
+                    logger.warning(f"Не удалось применить отступ к параграфу для задачи {task_data.get('key')}: {e}")
 
 
-def generate_word_document(processed_data: Dict, app_config: Dict) -> Optional[Document]:  # ИСПРАВЛЕНО ЗДЕСЬ
+def generate_word_document(processed_data: Dict, app_config: Dict) -> Optional[DocxDocument]:
     """
     Генерирует документ Word (.docx) на основе обработанных данных и конфигурации.
-    (остальная часть docstring без изменений)
     """
     logger.info("Начало генерации Word (.docx) документа...")
 
-    word_cfg = app_config.get('output_formats', {}).get('word', {})
-    if not word_cfg or not word_cfg.get('enabled', False):
-        logger.info("Генерация Word документа отключена в конфигурации или секция 'word' отсутствует.")
+    word_config = app_config.get('output_formats', {}).get('word', {})
+    if not word_config or not word_config.get('enabled', False):
+        logger.info("Генерация Word документа отключена в конфигурации.")
         return None
 
-    template_path = word_cfg.get('template_path')
-    document: Document  # Аннотация для переменной
-    if template_path:
+    template_file_path_str = word_config.get('template_path')
+    document_obj: DocxDocument
+    if template_file_path_str:
+        # Преобразуем относительный путь из конфига в абсолютный
+        actual_template_file_path = get_correct_path(template_file_path_str)
+        logger.info(f"Попытка использовать Word шаблон: {actual_template_file_path}")
         try:
-            document = Document(template_path)
-            logger.info(f"Используется Word шаблон: {template_path}")
+            if actual_template_file_path.is_file():
+                document_obj = Document(str(actual_template_file_path))  # Document ожидает строку или file-like object
+                logger.info(f"Успешно использован Word шаблон: {actual_template_file_path}")
+            else:
+                logger.warning(f"Файл шаблона Word не найден: {actual_template_file_path}. Создается пустой документ.")
+                document_obj = Document()
         except Exception as e:
             logger.warning(
-                f"Не удалось загрузить Word шаблон '{template_path}': {e}. Будет создан документ со стилями по умолчанию.")
-            document = Document()
+                f"Не удалось загрузить Word шаблон '{actual_template_file_path}': {e}. Создается пустой документ.")
+            document_obj = Document()
     else:
-        document = Document()
+        document_obj = Document()
         logger.info("Word шаблон не указан, создается документ со стилями по умолчанию.")
 
-    styles_cfg = word_cfg.get('styles', {})
-    s_main_title = styles_cfg.get('main_title', STYLE_HEADING_1)
-    s_table_title = styles_cfg.get('table_title', STYLE_HEADING_2)
-    s_section_title = styles_cfg.get('section_title', STYLE_HEADING_2)
-    s_ms_group = styles_cfg.get('microservice_group', STYLE_HEADING_3)
-    s_issue_type_group = styles_cfg.get('issue_type_group', STYLE_HEADING_4)
-    s_list_item = styles_cfg.get('list_bullet', STYLE_LIST_BULLET)
-    s_list_multiline_indent = styles_cfg.get('list_bullet_multiline_indent', STYLE_NORMAL)
-    s_table = styles_cfg.get('table_style', STYLE_TABLE_DEFAULT)
+    # Стили из конфигурации или значения по умолчанию
+    styles_map = word_config.get('styles', {})
+    style_h1 = styles_map.get('main_title', STYLE_HEADING_1)
+    style_h2_table = styles_map.get('table_title', STYLE_HEADING_2)
+    style_h2_section = styles_map.get('section_title', STYLE_HEADING_2)
+    style_h3_ms = styles_map.get('microservice_group', STYLE_HEADING_3)
+    style_h4_type = styles_map.get('issue_type_group', STYLE_HEADING_4)
+    style_task_first_line = styles_map.get('list_bullet_first_line', STYLE_LIST_BULLET)
+    style_task_multiline = styles_map.get('list_bullet_multiline_indent', STYLE_NORMAL)
+    style_table_content = styles_map.get('table_style', STYLE_TABLE_DEFAULT)
 
-    rn_config = app_config.get('release_notes', {})
+    # Отступ по умолчанию для многострочных элементов списка, если стиль Normal
+    default_multiline_indent = Pt(20)
 
-    gv = processed_data.get("global_version", "N/A")
-    cd = processed_data.get("current_date", "N/A")
-    title_tpl = rn_config.get('title_template', "Release Notes - {global_version} - {current_date}")
-    main_title = _format_template_string(title_tpl, {"global_version": gv, "current_date": cd})
-    _add_heading_with_style(document, main_title, level=1, default_style_name=s_main_title)
+    rn_cfg_data = app_config.get('release_notes', {})
 
-    ms_table_cfg = rn_config.get('microservices_table', {})
-    ms_summary = processed_data.get("microservices_summary", [])  # Используем List[Dict]
-    if ms_table_cfg.get('enabled', True) and ms_summary:
-        table_title_str = ms_table_cfg.get('title')
-        _add_heading_with_style(document, table_title_str, level=2, default_style_name=s_table_title)
+    # 1. Главный заголовок
+    gv_text = processed_data.get("global_version", "N/A")
+    date_text = processed_data.get("current_date", "N/A")
+    title_template_str = rn_cfg_data.get('title_template', "Release Notes - {global_version} - {current_date}")
+    main_title_str = _format_template_string(title_template_str, {"global_version": gv_text, "current_date": date_text})
+    _add_heading_styled(document_obj, main_title_str, level=1, default_style_name=style_h1)
 
-        cols_cfg: List[Dict] = ms_table_cfg.get('columns', [])  # Аннотация
-        tbl_headers: List[str] = [col.get('header', '') for col in cols_cfg]  # Аннотация
+    # 2. Таблица микросервисов
+    ms_table_cfg_data = rn_cfg_data.get('microservices_table', {})
+    ms_summary_data_list: List[Dict] = processed_data.get("microservices_summary", [])
+    if ms_table_cfg_data.get('enabled', True) and ms_summary_data_list:
+        table_title_heading = ms_table_cfg_data.get('title')
+        _add_heading_styled(document_obj, table_title_heading, level=2, default_style_name=style_h2_table)
 
-        if tbl_headers and any(h.strip() for h in tbl_headers):
+        cols_config_list: List[Dict] = ms_table_cfg_data.get('columns', [])
+        table_col_headers: List[str] = [col.get('header', '') for col in cols_config_list]
+
+        if table_col_headers and any(h.strip() for h in table_col_headers):
             try:
-                table = document.add_table(rows=1, cols=len(tbl_headers))
-                table.style = s_table
-                hdr_cells = table.rows[0].cells
-                for i, h_text in enumerate(tbl_headers): hdr_cells[i].text = h_text
-                for ms_item_data in ms_summary:
-                    row_cells = table.add_row().cells
-                    for i, col_config in enumerate(cols_cfg):
-                        placeholder = col_config.get('value_placeholder', '')
-                        cell_val = _format_template_string(placeholder, ms_item_data)
-                        row_cells[i].text = cell_val
-                document.add_paragraph()
+                created_table = document_obj.add_table(rows=1, cols=len(table_col_headers))
+                created_table.style = style_table_content
+                header_row_cells = created_table.rows[0].cells
+                for i, header_name in enumerate(table_col_headers): header_row_cells[i].text = header_name
+                for ms_item in ms_summary_data_list:
+                    data_row_cells = created_table.add_row().cells
+                    for i, col_cfg_item in enumerate(cols_config_list):
+                        placeholder_str = col_cfg_item.get('value_placeholder', '')
+                        cell_content_str = _format_template_string(placeholder_str, ms_item)
+                        data_row_cells[i].text = cell_content_str
+                document_obj.add_paragraph()  # Отступ после таблицы
             except Exception as e:
-                logger.error(f"Ошибка при создании таблицы микросервисов: {e}")
-        elif tbl_headers and not ms_summary:
-            logger.info("Таблица микросервисов: нет данных для строк.")
+                logger.error(f"Ошибка при создании таблицы микросервисов в Word: {e}", exc_info=True)
+        elif table_col_headers:  # Есть заголовки, но нет данных
+            logger.info("Таблица микросервисов для Word: нет данных для строк.")
 
-    sections_data_map = processed_data.get("sections_data", {})
-    sections_meta_map = rn_config.get('sections', {})
+    # 3. Информационные секции
+    sections_data = processed_data.get("sections_data", {})
+    sections_meta = rn_cfg_data.get('sections', {})
 
-    for section_id_key, section_meta_config in sections_meta_map.items():
-        current_section_proc_data = sections_data_map.get(section_id_key)
-        if not current_section_proc_data:
-            logger.debug(f"Секция '{section_id_key}' пропущена (нет данных).")
+    for section_id, section_meta_config_data in sections_meta.items():
+        current_section_from_processor = sections_data.get(section_id)
+        if not current_section_from_processor:
+            logger.debug(f"Секция '{section_id}' пропущена в Word (нет данных).")
             continue
 
-        _add_heading_with_style(document, current_section_proc_data.get('title'), level=2,
-                                default_style_name=s_section_title)
+        _add_heading_styled(document_obj, current_section_from_processor.get('title'), level=2,
+                            default_style_name=style_h2_section)
 
-        template_for_issue = section_meta_config.get('issue_display_template')
-        if not template_for_issue:
-            logger.warning(f"Для секции '{section_id_key}' отсутствует 'issue_display_template'.")
-            p = document.add_paragraph(style=s_list_item)
-            p.add_run("* Конфигурация отображения задач отсутствует.*")
-            document.add_paragraph()
+        issue_template = section_meta_config_data.get('issue_display_template')
+        if not issue_template:
+            logger.warning(f"Для секции '{section_id}' в Word отсутствует 'issue_display_template'.")
+            document_obj.add_paragraph("* Конфигурация отображения задач отсутствует.*", style=style_task_first_line)
+            document_obj.add_paragraph()
             continue
 
-        is_flat_mode = current_section_proc_data.get("disable_grouping", False)
+        is_flat_display = current_section_from_processor.get("disable_grouping", False)
 
-        if is_flat_mode:
-            flat_task_list: List[Dict] = current_section_proc_data.get("tasks_flat_list", [])  # Аннотация
-            if not flat_task_list:
-                p = document.add_paragraph(style=s_list_item)
-                p.add_run("* Нет задач для отображения в этой секции.*")
+        if is_flat_display:
+            tasks_list_flat: List[Dict] = current_section_from_processor.get("tasks_flat_list", [])
+            if not tasks_list_flat:
+                document_obj.add_paragraph("* Нет задач для отображения в этой секции.*", style=style_task_first_line)
             else:
-                sorted_tasks = sorted(flat_task_list, key=lambda tsk_dict: str(tsk_dict.get("key", "")))
-                for task_dict_item in sorted_tasks:
-                    _add_task_entry(document, template_for_issue, task_dict_item, s_list_item, s_list_multiline_indent)
-            document.add_paragraph()
-        else:
-            ms_map_in_section = current_section_proc_data.get('microservices', {})
-            if not ms_map_in_section:
-                logger.debug(f"В секции '{section_id_key}' нет МС с задачами (группировка).")
+                for task_data_item in sorted(tasks_list_flat, key=lambda t: str(t.get("key", ""))):
+                    _add_task_entry_to_document(document_obj, issue_template, task_data_item, style_task_first_line,
+                                                style_task_multiline, default_multiline_indent)
+            document_obj.add_paragraph()
+        else:  # Группировка по МС
+            ms_map = current_section_from_processor.get('microservices', {})
+            if not ms_map:
+                logger.debug(f"В секции '{section_id}' нет МС с задачами для Word (группировка).")
                 continue
-            for ms_name_str in sorted(ms_map_in_section.keys()):
-                ms_data_for_render = ms_map_in_section[ms_name_str]
-                has_tasks_for_this_ms = any(
-                    ms_data_for_render.get('issue_types', {}).values()) or ms_data_for_render.get(
+            for ms_name_val in sorted(ms_map.keys()):
+                ms_render_data = ms_map[ms_name_val]
+                has_tasks = any(ms_render_data.get('issue_types', {}).values()) or ms_render_data.get(
                     'tasks_without_type_grouping')
-                if not has_tasks_for_this_ms:
-                    logger.debug(f"МС '{ms_name_str}' в '{section_id_key}' не содержит задач.")
+                if not has_tasks:
+                    logger.debug(f"МС '{ms_name_val}' в '{section_id}' не содержит задач для Word.")
                     continue
-                _add_heading_with_style(document, ms_name_str, level=3, default_style_name=s_ms_group)
-                group_by_type_flag = current_section_proc_data.get('group_by_issue_type', False)
-                render_queue_for_ms: List[Dict] = []  # Аннотация
-                if group_by_type_flag:
-                    issue_types_data = ms_data_for_render.get('issue_types', {})
-                    for type_name_str in sorted(issue_types_data.keys()):
-                        tasks_of_type = issue_types_data[type_name_str]
-                        if tasks_of_type:
-                            render_queue_for_ms.append(
-                                {"is_header": True, "text": type_name_str, "level_style": s_issue_type_group})
-                            render_queue_for_ms.extend([{"is_header": False, "data": t_data_dict} for t_data_dict in
-                                                        sorted(tasks_of_type, key=lambda t: str(t.get("key", "")))])
-                else:
-                    tasks_list_no_type_group = ms_data_for_render.get('tasks_without_type_grouping', [])
-                    if tasks_list_no_type_group:
-                        render_queue_for_ms.extend([{"is_header": False, "data": t_data_dict} for t_data_dict in
-                                                    sorted(tasks_list_no_type_group,
-                                                           key=lambda t: str(t.get("key", "")))])
-                if not render_queue_for_ms: continue
-                for item_to_add in render_queue_for_ms:
-                    if item_to_add.get("is_header"):
-                        _add_heading_with_style(document, item_to_add["text"], level=4,
-                                                default_style_name=item_to_add["level_style"])
-                    else:
-                        _add_task_entry(document, template_for_issue, item_to_add["data"], s_list_item,
-                                        s_list_multiline_indent)
-                document.add_paragraph()
+                _add_heading_styled(document_obj, ms_name_val, level=3, default_style_name=style_h3_ms)
 
-    logger.info("Генерация Word документа завершена.")
-    return document
+                group_by_type = current_section_from_processor.get('group_by_issue_type', False)
+                render_queue: List[Dict] = []
+                if group_by_type:
+                    types_data = ms_render_data.get('issue_types', {})
+                    for type_name_val in sorted(types_data.keys()):
+                        tasks = types_data[type_name_val]
+                        if tasks:
+                            render_queue.append(
+                                {"is_header": True, "text": type_name_val, "level_style_name": style_h4_type})
+                            render_queue.extend([{"is_header": False, "data": t_dict} for t_dict in
+                                                 sorted(tasks, key=lambda t: str(t.get("key", "")))])
+                else:
+                    tasks_no_group = ms_render_data.get('tasks_without_type_grouping', [])
+                    if tasks_no_group:
+                        render_queue.extend([{"is_header": False, "data": t_dict} for t_dict in
+                                             sorted(tasks_no_group, key=lambda t: str(t.get("key", "")))])
+
+                if not render_queue: continue
+                for item in render_queue:
+                    if item.get("is_header"):
+                        _add_heading_styled(document_obj, item["text"], level=4,
+                                            default_style_name=item["level_style_name"])
+                    else:
+                        _add_task_entry_to_document(document_obj, issue_template, item["data"], style_task_first_line,
+                                                    style_task_multiline, default_multiline_indent)
+                document_obj.add_paragraph()
+
+    logger.info("Генерация Word документа успешно завершена.")
+    return document_obj
+
+# Блок if __name__ == '__main__': УДАЛЕН
