@@ -2,6 +2,7 @@
 import argparse
 import sys
 import logging
+import logging.handlers
 import json
 from pathlib import Path
 from datetime import datetime
@@ -13,6 +14,47 @@ import getpass
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+def get_application_base_path() -> Path:
+    """Возвращает базовый путь для доступа к ресурсам, работает и в .exe, и при обычном запуске."""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Запущено из PyInstaller .exe
+        return Path(sys.executable).parent
+    else:
+        # Запущено как обычный .py скрипт (main.py находится в src)
+        return Path(__file__).resolve().parent.parent # Корень проекта
+
+APP_BASE_PATH = get_application_base_path()
+LOG_DIR = APP_BASE_PATH / "logs" # Папка для логов рядом с .exe или в корне проекта
+LOG_DIR.mkdir(exist_ok=True) # Создаем папку, если ее нет
+LOG_FILE_PATH = LOG_DIR / f"rn_generator_{datetime.now().strftime('%Y-%m-%d')}.log" # Имя лог-файла с датой
+
+# --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
+# Устанавливаем базовый формат. Уровень будет установлен позже из аргументов.
+log_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - [%(module)s.%(funcName)s:%(lineno)d] - %(message)s'
+)
+# Корневой логгер
+root_logger = logging.getLogger()
+# Не устанавливаем уровень здесь, он будет из args.loglevel
+
+# Обработчик для вывода в консоль (стандартный stderr)
+console_handler = logging.StreamHandler(sys.stderr) # Или sys.stdout
+console_handler.setFormatter(log_formatter)
+root_logger.addHandler(console_handler)
+
+# Обработчик для записи в файл
+try:
+    file_handler = logging.FileHandler(LOG_FILE_PATH, mode='a', encoding='utf-8') # 'a' - append
+    file_handler.setFormatter(log_formatter)
+    root_logger.addHandler(file_handler)
+    # Начальное сообщение в лог-файл о его создании/использовании
+    # (уровень INFO, чтобы всегда записывалось, если INFO или DEBUG включен)
+    logging.info(f"Логирование также настроено в файл: {LOG_FILE_PATH}")
+except Exception as e:
+    # Если не удалось настроить файловый логгер, выводим ошибку в консоль
+    print(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось настроить запись логов в файл {LOG_FILE_PATH}: {e}", file=sys.stderr)
+# --- КОНЕЦ НАСТРОЙКИ ЛОГИРОВАНИЯ ---
 
 # Импорты наших модулей
 from src.config_loader import load_config, load_environment_variables
@@ -26,6 +68,7 @@ from src.word_generator import generate_word_document
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - [%(module)s.%(funcName)s:%(lineno)d] - %(message)s')
 logger = logging.getLogger(__name__)  # Логгер для текущего модуля (main.py)
+
 
 
 def get_interactive_input(prompt_message: str, default_value: str | None = None, is_secret_input: bool = False) -> str:
@@ -102,6 +145,7 @@ def main():
     logging.getLogger().setLevel(numeric_level)  # Устанавливаем уровень для корневого логгера
 
     logger.info("=" * 30 + " Запуск Release Notes генератора " + "=" * 30)
+    logger.info(f"Логирование в файл: {LOG_FILE_PATH} (уровень: {args.loglevel.upper()})")
 
     try:
         # --- Шаг 1: Загрузка конфигурации и переменных окружения ---
