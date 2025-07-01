@@ -99,7 +99,7 @@ def load_environment_variables() -> dict:
     # env_vars['JIRA_PASSWORD'] = os.getenv('JIRA_PASSWORD')
 
     if not env_vars.get('JIRA_COOKIE_STRING'):
-        # Это предупреждение, так как main.py может запросить куку интерактивно
+        # Это предупреждение, так как core_logic.py может запросить куку интерактивно
         logger.warning("Переменная окружения JIRA_COOKIE_STRING не установлена ни в .env, ни в системном окружении.")
     else:
         logger.debug("JIRA_COOKIE_STRING успешно загружена из переменных окружения.")

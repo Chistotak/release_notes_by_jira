@@ -59,7 +59,7 @@
 3.  Выполните команду:
 
     ```bash
-    python src/main.py [ID_ФИЛЬТРА_JIRA] [опции]
+    python src/core_logic.py [ID_ФИЛЬТРА_JIRA] [опции]
     ```
 
     **Аргументы и опции:**
@@ -71,9 +71,9 @@
 
     **Примеры:**
     ```bash
-    python src/main.py 12345
-    python src/main.py
-    python src/main.py 67890 --output-dir releases_archive --loglevel debug
+    python src/core_logic.py 12345
+    python src/core_logic.py
+    python src/core_logic.py 67890 --output-dir releases_archive --loglevel debug
     ```
 
 ## Структура проекта
