@@ -5,7 +5,7 @@
 # не переданы через командную строку. Если и здесь они не указаны (или отсутствуют),
 # скрипт запросит их интерактивно.
 defaults:
-  filter_id: "34680"  # ЗАМЕНИ НА СВОЙ ID ФИЛЬТРА ПО УМОЛЧАНИЮ или оставь пустым/закомментируй
+  filter_id: "34903"  # ЗАМЕНИ НА СВОЙ ID ФИЛЬТРА ПО УМОЛЧАНИЮ или оставь пустым/закомментируй
   output_dir: 'C:\Users\haranski\Downloads' # ЗАМЕНИ НА СВОЙ ПУТЬ ПО УМОЛЧАНИЮ или оставь пустым/закомментируй
 
 # -----------------------------------------------------------------------------
@@ -62,7 +62,7 @@ release_notes:
       title: "Изменения" # Заголовок этой секции в документе
       source_custom_field_id: "customfield_10400" # ID поля "Описание для заказчиков"
                                                  # Если поле пустое, задача не попадет в эту секцию
-      disable_grouping: true # По умолчанию false (т.е. группировка по МС будет)
+      disable_grouping: false # По умолчанию false (т.е. группировка по МС будет)
       # group_by_issue_type имеет смысл только если disable_grouping = false
       group_by_issue_type: true # Группировать ли задачи по типу (Bug, Story и т.д.)
       issue_header_template: "{key} {formatted_issuelinks} {formatted_client_info}"
@@ -77,15 +77,15 @@ release_notes:
     installation_instructions:
       title: "Инструкция по установке"
       source_custom_field_id: "customfield_12001" # ID поля "Инструкция по установке"
-      disable_grouping: true
+      disable_grouping: false
       group_by_issue_type: false
-      #issue_header_template: "{key} {formatted_issuelinks_line_if_any} {formatted_client_info_line_if_any}"
+      issue_header_template: "{key} {formatted_issuelinks_line_if_any} {formatted_client_info_line_if_any}"
       issue_display_template: |
         {content}
 
   # Конфигурация для таблицы микросервисов и их версий в начале Release Notes
   microservices_table:
-    enabled: false # Включить/выключить генерацию таблицы
+    enabled: true # Включить/выключить генерацию таблицы
     title: "Состав релиза по микросервисам"
     columns:
       - header: "Микросервис"
